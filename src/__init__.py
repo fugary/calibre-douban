@@ -3,7 +3,6 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from functools import lru_cache
 from queue import Queue, Empty
 from urllib.parse import urlparse, unquote, urlencode
 from urllib.request import Request, urlopen
@@ -17,8 +16,7 @@ from lxml import etree
 DOUBAN_SEARCH_JSON_URL = "https://www.douban.com/j/search"
 DOUBAN_BOOK_URL = 'https://book.douban.com/subject/%s/'
 DOUBAN_BOOK_CAT = "1001"
-DOUBAN_BOOK_CACHE_SIZE = 500  # 最大缓存数量
-DOUBAN_CONCURRENCY_SIZE = 3  # 并发查询数
+DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
 
@@ -69,7 +67,6 @@ class DoubanBookLoader:
     def __init__(self):
         self.book_parser = DoubanBookHtmlParser()
 
-    @lru_cache(maxsize=DOUBAN_BOOK_CACHE_SIZE)
     def load_book(self, url, log):
         book = None
         start_time = time.time()
@@ -278,7 +275,7 @@ class NewDoubanBooks(Source):
             mi.url = book['url']
             mi.cover = book.get('cover', None)
             mi.publisher = book['publisher']
-            pubdate = book['publishedDate']
+            pubdate = book.get('publishedDate', None)
             if pubdate:
                 try:
                     if re.compile('^\\d{4}-\\d+$').match(pubdate):
@@ -288,9 +285,9 @@ class NewDoubanBooks(Source):
                 except:
                     log.error('Failed to parse pubdate %r' % pubdate)
             mi.comments = book['description']
-            mi.tags = book['tags']
+            mi.tags = book.get('tags', [])
             mi.rating = book['rating']
-            mi.isbn = book['isbn']
+            mi.isbn = book.get('isbn', '')
             mi.series = book.get('series', [])
             mi.language = 'zh_CN'
             log.info('parsed book', book)

@@ -1,4 +1,3 @@
-import hashlib
 import json
 import re
 import time
@@ -9,6 +8,8 @@ from queue import Queue, Empty
 from urllib.parse import urlparse, unquote, urlencode
 from urllib.request import Request, urlopen
 
+from calibre import random_user_agent
+from calibre.ebooks.metadata import check_isbn
 from calibre.ebooks.metadata.book.base import Metadata
 from calibre.ebooks.metadata.sources.base import Source, Option
 from lxml import etree
@@ -17,19 +18,17 @@ DOUBAN_SEARCH_JSON_URL = "https://www.douban.com/j/search"
 DOUBAN_BOOK_URL = 'https://book.douban.com/subject/%s/'
 DOUBAN_BOOK_CAT = "1001"
 DOUBAN_BOOK_CACHE_SIZE = 500  # 最大缓存数量
-DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
-DEFAULT_HEADERS = {
-    'user-agent': 'Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3573.0 Safari/537.36'
-}
+DOUBAN_CONCURRENCY_SIZE = 3  # 并发查询数
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
 
 
 class DoubanBookSearcher:
 
-    def __init__(self):
+    def __init__(self, max_workers):
         self.book_loader = DoubanBookLoader()
-        self.thread_pool = ThreadPoolExecutor(max_workers=5, thread_name_prefix='douban_async')
+        self.max_workers = max_workers
+        self.thread_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='douban_async')
 
     def calc_url(self, href):
         query = urlparse(href).query
@@ -41,11 +40,11 @@ class DoubanBookSearcher:
         url = DOUBAN_SEARCH_JSON_URL
         params = {"start": 0, "cat": DOUBAN_BOOK_CAT, "q": query}
         data = bytes(urlencode(params), encoding='utf8')
-        res = urlopen(Request(url, data, headers=DEFAULT_HEADERS))
+        res = urlopen(Request(url, data, headers={'user-agent': random_user_agent()}))
         book_urls = []
         if res.status in [200, 201]:
             book_list_content = json.load(res)
-            for item in book_list_content['items'][0:DOUBAN_CONCURRENCY_SIZE]:  # 获取部分数据，默认5条
+            for item in book_list_content['items'][0:self.max_workers]:  # 获取部分数据，默认5条
                 html = etree.HTML(item)
                 a = html.xpath('//a[@class="nbg"]')
                 if len(a):
@@ -74,9 +73,9 @@ class DoubanBookLoader:
     def load_book(self, url, log):
         book = None
         start_time = time.time()
-        res = urlopen(Request(url, headers=DEFAULT_HEADERS))
+        res = urlopen(Request(url, headers={'user-agent': random_user_agent()}))
         if res.status in [200, 201]:
-            log.info("下载书籍:{}成功,耗时{:.0f}ms".format(url, (time.time() - start_time) * 1000))
+            log.info("Downloaded:{} Successful,Time {:.0f}ms".format(url, (time.time() - start_time) * 1000))
             book_detail_content = res.read()
             book = self.book_parser.parse_book(url, book_detail_content.decode("utf8"))
         return book
@@ -156,7 +155,7 @@ class DoubanBookHtmlParser:
         return text if text else default_str
 
 
-class NewDouban(Source):
+class NewDoubanBooks(Source):
     name = 'New Douban Books'  # Name of the plugin
     description = 'Downloads metadata and covers from Douban Books web site.'
     supported_platforms = ['windows', 'osx', 'linux']  # Platforms this plugin will run on
@@ -168,10 +167,15 @@ class NewDouban(Source):
         'title', 'authors', 'tags', 'pubdate', 'comments', 'publisher',
         'identifier:isbn', 'rating', 'identifier:' + PROVIDER_ID
     ])  # language currently disabled
-    book_searcher = DoubanBookSearcher()
-
+    book_searcher = DoubanBookSearcher(DOUBAN_CONCURRENCY_SIZE)
     options = (
-        Option(),
+        # name, type, default, label, default, choices
+        # type 'number', 'string', 'bool', 'choices'
+        Option(
+            'douban_concurrency_size', 'number', DOUBAN_CONCURRENCY_SIZE,
+            _('Douban concurrency size:'),
+            _('The number of douban concurrency cannot be too high!')
+        ),
     )
 
     def get_book_url(self, identifiers):  # {{{
@@ -221,7 +225,6 @@ class NewDouban(Source):
         if cached_url is None:
             log.info('No cover found')
             return
-        log.info('下载封面地址:', cached_url)
         br = self.browser
         log('Downloading cover from:', cached_url)
         try:
@@ -252,7 +255,11 @@ class NewDouban(Source):
             authors=None,  # {{{
             identifiers={},
             timeout=30):
-        books = self.book_searcher.search_books(title, log)
+        concurrency_size = int(self.prefs.get('douban_concurrency_size'))
+        if concurrency_size != self.book_searcher.max_workers:
+            self.book_searcher = DoubanBookSearcher(concurrency_size)
+        isbn = check_isbn(identifiers.get('isbn', None))
+        books = self.book_searcher.search_books(isbn or title, log)
         for book in books:
             ans = self.to_metadata(book, log)
             if isinstance(ans, Metadata):
@@ -297,18 +304,17 @@ if __name__ == "__main__":
     )
 
     test_identify_plugin(
-        NewDouban.name, [
+        NewDoubanBooks.name, [
             ({
                  'identifiers': {
-                     'isbn': '9787536692930'
+                     'isbn': '9787111544937'
                  },
-                 'title': '三体',
-                 'authors': ['刘慈欣']
-             }, [title_test('三体', exact=True),
-                 authors_test(['刘慈欣'])]),
+                 'title': '深入理解计算机系统（原书第3版）'
+             }, [title_test('深入理解计算机系统（原书第3版）', exact=True),
+                 authors_test(['randal e.bryant', "david o'hallaron", '贺莲', '龚奕利'])]),
             ({
-                 'title': 'Linux内核修炼之道',
-                 'authors': ['任桥伟']
-             }, [title_test('Linux内核修炼之道', exact=False)]),
+                 'title': '三国演义'
+             }, [title_test('三国演义', exact=True),
+                 authors_test(['罗贯中'])])
         ]
     )

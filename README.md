@@ -1,5 +1,6 @@
 ## calibre-douban
-Calibre douban metadata downloader
+Calibre douban metadata downloader.
+Based on https://book.douban.com web pages.
 
 ### Calibre插件
 

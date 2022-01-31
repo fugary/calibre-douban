@@ -126,7 +126,7 @@ class DoubanBookHtmlParser:
             book['description'] = etree.tostring(summary_element[-1], encoding="utf8").decode("utf8").strip()
         tag_elements = html.xpath("//a[contains(@class, 'tag')]")
         if len(tag_elements):
-            book['tags'] = [tag_element.text.strip() for tag_element in tag_elements]
+            book['tags'] = [self.get_text(tag_element) for tag_element in tag_elements]
         book['source'] = {
             "id": PROVIDER_ID,
             "description": PROVIDER_NAME,

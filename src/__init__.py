@@ -114,6 +114,8 @@ class DoubanBookHtmlParser:
                 book['authors'].extend([self.get_text(author_element) for author_element in element.findall("..//a")])
             elif text.startswith("出版社"):
                 book['publisher'] = self.get_tail(element)
+            elif text.startswith("副标题"):
+                book['title'] = book['title'] + ':' + self.get_tail(element)
             elif text.startswith("出版年"):
                 book['publishedDate'] = self.get_tail(element)
             elif text.startswith("ISBN"):

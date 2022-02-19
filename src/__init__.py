@@ -19,6 +19,8 @@ DOUBAN_BOOK_CAT = "1001"
 DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
+PROVIDER_VERSION = (1, 0, 2)
+PROVIDER_AUTHOR = 'Gary Fu'
 
 
 class DoubanBookSearcher:
@@ -109,9 +111,9 @@ class DoubanBookHtmlParser:
         for element in elements:
             text = self.get_text(element)
             if text.startswith("作者"):
-                book['authors'].extend([self.get_text(author_element) for author_element in element.findall("..//a")])
+                book['authors'].extend([self.get_text(author_element) for author_element in filter(self.author_filter, element.findall("..//a"))])
             elif text.startswith("译者"):
-                book['authors'].extend([self.get_text(author_element) for author_element in element.findall("..//a")])
+                book['authors'].extend([self.get_text(author_element) for author_element in filter(self.author_filter, element.findall("..//a"))])
             elif text.startswith("出版社"):
                 book['publisher'] = self.get_tail(element)
             elif text.startswith("副标题"):
@@ -139,6 +141,10 @@ class DoubanBookHtmlParser:
     def get_rating(self, rating_element):
         return float(self.get_text(rating_element, '0')) / 2
 
+    def author_filter(self, a_element):
+        a_href = a_element.attrib['href']
+        return '/author' in a_href
+
     def get_text(self, element, default_str=''):
         text = default_str
         if len(element) and element[0].text:
@@ -158,8 +164,8 @@ class NewDoubanBooks(Source):
     name = 'New Douban Books'  # Name of the plugin
     description = 'Downloads metadata and covers from Douban Books web site.'
     supported_platforms = ['windows', 'osx', 'linux']  # Platforms this plugin will run on
-    author = 'Gary Fu'  # The author of this plugin
-    version = (1, 0, 0)  # The version number of this plugin
+    author = PROVIDER_AUTHOR  # The author of this plugin
+    version = PROVIDER_VERSION  # The version number of this plugin
     minimum_calibre_version = (5, 0, 0)
     capabilities = frozenset(['identify', 'cover'])
     touched_fields = frozenset([

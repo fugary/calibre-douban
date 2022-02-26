@@ -19,7 +19,7 @@ DOUBAN_BOOK_CAT = "1001"
 DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (1, 0, 2)
+PROVIDER_VERSION = (1, 0, 3)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -143,7 +143,7 @@ class DoubanBookHtmlParser:
 
     def author_filter(self, a_element):
         a_href = a_element.attrib['href']
-        return '/author' in a_href
+        return '/author' in a_href or '/search' in a_href
 
     def get_text(self, element, default_str=''):
         text = default_str

@@ -19,7 +19,7 @@ DOUBAN_BOOK_CAT = "1001"
 DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (1, 0, 3)
+PROVIDER_VERSION = (1, 0, 4)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -157,6 +157,8 @@ class DoubanBookHtmlParser:
         text = default_str
         if isinstance(element, etree._Element) and element.tail:
             text = element.tail.strip()
+            if not text:
+                text = self.get_text(element.getnext(), default_str)
         return text if text else default_str
 
 

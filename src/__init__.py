@@ -19,7 +19,7 @@ DOUBAN_BOOK_CAT = "1001"
 DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (1, 0, 4)
+PROVIDER_VERSION = (1, 0, 5)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -83,6 +83,7 @@ class DoubanBookLoader:
 class DoubanBookHtmlParser:
     def __init__(self):
         self.id_pattern = re.compile(".*/subject/(\\d+)/?")
+        self.tag_pattern = re.compile("criteria = '(.+)'")
 
     def parse_book(self, url, book_content):
         book = {}
@@ -131,12 +132,21 @@ class DoubanBookHtmlParser:
         tag_elements = html.xpath("//a[contains(@class, 'tag')]")
         if len(tag_elements):
             book['tags'] = [self.get_text(tag_element) for tag_element in tag_elements]
+        else:
+            book['tags'] = self.get_tags(book_content)
         book['source'] = {
             "id": PROVIDER_ID,
             "description": PROVIDER_NAME,
             "link": "https://book.douban.com/"
         }
         return book
+
+    def get_tags(self, book_content):
+        tag_match = self.tag_pattern.findall(book_content)
+        if len(tag_match):
+            return [tag.replace('7:', '') for tag in
+                    filter(lambda tag: tag and tag.startswith('7:'), tag_match[0].split('|'))]
+        return []
 
     def get_rating(self, rating_element):
         return float(self.get_text(rating_element, '0')) / 2

@@ -17,9 +17,10 @@ DOUBAN_SEARCH_JSON_URL = "https://www.douban.com/j/search"
 DOUBAN_BOOK_URL = 'https://book.douban.com/subject/%s/'
 DOUBAN_BOOK_CAT = "1001"
 DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
+DOUBAN_BOOK_URL_PATTERN = re.compile(".*/subject/(\\d+)/?")
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (1, 0, 5)
+PROVIDER_VERSION = (1, 0, 6)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -34,7 +35,8 @@ class DoubanBookSearcher:
         query = urlparse(href).query
         params = {item.split('=')[0]: item.split('=')[1] for item in query.split('&')}
         url = unquote(params['url'])
-        return url
+        if DOUBAN_BOOK_URL_PATTERN.match(url):
+            return url
 
     def load_book_urls(self, query):
         url = DOUBAN_SEARCH_JSON_URL
@@ -44,13 +46,15 @@ class DoubanBookSearcher:
         book_urls = []
         if res.status in [200, 201]:
             book_list_content = json.load(res)
-            for item in book_list_content['items'][0:self.max_workers]:  # 获取部分数据，默认5条
-                html = etree.HTML(item)
-                a = html.xpath('//a[@class="nbg"]')
-                if len(a):
-                    href = a[0].attrib['href']
-                    parsed = self.calc_url(href)
-                    book_urls.append(parsed)
+            for item in book_list_content['items']:
+                if len(book_urls) < self.max_workers: # 获取部分数据，默认5条
+                    html = etree.HTML(item)
+                    a = html.xpath('//a[@class="nbg"]')
+                    if len(a):
+                        href = a[0].attrib['href']
+                        parsed = self.calc_url(href)
+                        if parsed:
+                            book_urls.append(parsed)
         return book_urls
 
     def search_books(self, query, log):
@@ -82,7 +86,7 @@ class DoubanBookLoader:
 
 class DoubanBookHtmlParser:
     def __init__(self):
-        self.id_pattern = re.compile(".*/subject/(\\d+)/?")
+        self.id_pattern = DOUBAN_BOOK_URL_PATTERN
         self.tag_pattern = re.compile("criteria = '(.+)'")
 
     def parse_book(self, url, book_content):
@@ -330,7 +334,7 @@ if __name__ == "__main__":
              }, [title_test('深入理解计算机系统（原书第3版）', exact=True),
                  authors_test(['randal e.bryant', "david o'hallaron", '贺莲', '龚奕利'])]),
             ({
-                 'title': '三国演义'
+                 'title': '爱死亡机器人'
              }, [title_test('三国演义', exact=True),
                  authors_test(['罗贯中'])])
         ]

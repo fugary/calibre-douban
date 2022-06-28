@@ -20,7 +20,7 @@ DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 DOUBAN_BOOK_URL_PATTERN = re.compile(".*/subject/(\\d+)/?")
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (1, 0, 6)
+PROVIDER_VERSION = (1, 0, 7)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -346,8 +346,8 @@ if __name__ == "__main__":
              }, [title_test('深入理解计算机系统（原书第3版）', exact=True),
                  authors_test(['randal e.bryant', "david o'hallaron", '贺莲', '龚奕利'])]),
             ({
-                 'title': '爱死亡机器人'
-             }, [title_test('三国演义', exact=True),
-                 authors_test(['罗贯中'])])
+                 'title': '凤凰架构'
+             }, [title_test('凤凰架构:构建可靠的大型分布式系统', exact=True),
+                 authors_test(['周志明'])])
         ]
     )

@@ -112,13 +112,14 @@ class DoubanBookHtmlParser:
         book['rating'] = self.get_rating(rating_element)
         elements = html.xpath("//span[@class='pl']")
         book['authors'] = []
+        book['translators'] = []
         book['publisher'] = ''
         for element in elements:
             text = self.get_text(element)
             if text.startswith("作者"):
                 book['authors'].extend([self.get_text(author_element) for author_element in filter(self.author_filter, element.findall("..//a"))])
             elif text.startswith("译者"):
-                book['authors'].extend([self.get_text(author_element) for author_element in filter(self.author_filter, element.findall("..//a"))])
+                book['translators'].extend([self.get_text(translator_element) for translator_element in filter(self.author_filter, element.findall("..//a"))])
             elif text.startswith("出版社"):
                 book['publisher'] = self.get_tail(element)
             elif text.startswith("副标题"):
@@ -196,6 +197,11 @@ class NewDoubanBooks(Source):
             'douban_concurrency_size', 'number', DOUBAN_CONCURRENCY_SIZE,
             _('Douban concurrency size:'),
             _('The number of douban concurrency cannot be too high!')
+        ),
+        Option(
+            'add_translator_to_author', 'bool', True,
+            _('Add translator to author'),
+            _('If selected, translator will be written to metadata as author')
         ),
     )
 
@@ -279,10 +285,14 @@ class NewDoubanBooks(Source):
         concurrency_size = int(self.prefs.get('douban_concurrency_size'))
         if concurrency_size != self.book_searcher.max_workers:
             self.book_searcher = DoubanBookSearcher(concurrency_size)
+            
+        add_translator_to_author = self.prefs.get(
+            'add_translator_to_author')
+
         isbn = check_isbn(identifiers.get('isbn', None))
         books = self.book_searcher.search_books(isbn or title, log)
         for book in books:
-            ans = self.to_metadata(book, log)
+            ans = self.to_metadata(book, add_translator_to_author, log)
             if isinstance(ans, Metadata):
                 db = ans.identifiers[PROVIDER_ID]
                 if ans.isbn:
@@ -292,9 +302,11 @@ class NewDoubanBooks(Source):
                 self.clean_downloaded_metadata(ans)
                 result_queue.put(ans)
 
-    def to_metadata(self, book, log):
+    def to_metadata(self, book, add_translator_to_author, log):
         if book:
-            mi = Metadata(book['title'], book['authors'])
+            authors = (book['authors'] + book['translators']
+                       ) if add_translator_to_author else book['authors']
+            mi = Metadata(book['title'], authors)
             mi.identifiers = {PROVIDER_ID: book['id']}
             mi.url = book['url']
             mi.cover = book.get('cover', None)

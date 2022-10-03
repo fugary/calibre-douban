@@ -14,13 +14,15 @@ from calibre.ebooks.metadata.sources.base import Source, Option
 from lxml import etree
 
 DOUBAN_SEARCH_JSON_URL = "https://www.douban.com/j/search"
+DOUBAN_SEARCH_URL = "https://www.douban.com/search"
+DOUBAN_SEARCH_NEW_MODE = True
 DOUBAN_BOOK_URL = 'https://book.douban.com/subject/%s/'
 DOUBAN_BOOK_CAT = "1001"
 DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 DOUBAN_BOOK_URL_PATTERN = re.compile(".*/subject/(\\d+)/?")
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (1, 0, 7)
+PROVIDER_VERSION = (1, 1, 0)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -57,8 +59,28 @@ class DoubanBookSearcher:
                             book_urls.append(parsed)
         return book_urls
 
+    def load_book_urls_new(self, query):
+        url = DOUBAN_SEARCH_URL
+        params = {"cat": DOUBAN_BOOK_CAT, "q": query}
+        data = bytes(urlencode(params), encoding='utf8')
+        res = urlopen(Request(url, data, headers={'user-agent': random_user_agent()}))
+        book_urls = []
+        if res.status in [200, 201]:
+            html = etree.HTML(res.read())
+            alist = html.xpath('//a[@class="nbg"]')
+            for link in alist:
+                href = link.attrib['href']
+                parsed = self.calc_url(href)
+                if parsed:
+                    if len(book_urls) < DOUBAN_CONCURRENCY_SIZE:
+                        book_urls.append(parsed)
+        return book_urls
+
     def search_books(self, query, log):
-        book_urls = self.load_book_urls(query)
+        if DOUBAN_SEARCH_NEW_MODE:
+            book_urls = self.load_book_urls_new(query)
+        else:
+            book_urls = self.load_book_urls(query)
         books = []
         futures = [self.thread_pool.submit(self.book_loader.load_book, book_url, log) for book_url in book_urls]
         for future in as_completed(futures):

@@ -1,6 +1,7 @@
-import json
 import re
 import time
+import random
+import gzip
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from queue import Queue, Empty
@@ -15,23 +16,24 @@ from lxml import etree
 
 DOUBAN_SEARCH_JSON_URL = "https://www.douban.com/j/search"
 DOUBAN_SEARCH_URL = "https://www.douban.com/search"
-DOUBAN_SEARCH_NEW_MODE = True
 DOUBAN_BOOK_URL = 'https://book.douban.com/subject/%s/'
 DOUBAN_BOOK_CAT = "1001"
 DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 DOUBAN_BOOK_URL_PATTERN = re.compile(".*/subject/(\\d+)/?")
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (1, 1, 0)
+PROVIDER_VERSION = (2, 0, 0)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
 class DoubanBookSearcher:
 
-    def __init__(self, max_workers):
-        self.book_loader = DoubanBookLoader()
+    def __init__(self, max_workers, douban_delay_enable, douban_login_cookie):
+        self.book_parser = DoubanBookHtmlParser()
         self.max_workers = max_workers
         self.thread_pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='douban_async')
+        self.douban_delay_enable = douban_delay_enable
+        self.douban_login_cookie = douban_login_cookie
 
     def calc_url(self, href):
         query = urlparse(href).query
@@ -40,70 +42,63 @@ class DoubanBookSearcher:
         if DOUBAN_BOOK_URL_PATTERN.match(url):
             return url
 
-    def load_book_urls(self, query):
-        url = DOUBAN_SEARCH_JSON_URL
-        params = {"start": 0, "cat": DOUBAN_BOOK_CAT, "q": query}
-        data = bytes(urlencode(params), encoding='utf8')
-        res = urlopen(Request(url, data, headers={'user-agent': random_user_agent()}))
-        book_urls = []
-        if res.status in [200, 201]:
-            book_list_content = json.load(res)
-            for item in book_list_content['items']:
-                if len(book_urls) < self.max_workers: # 获取部分数据，默认5条
-                    html = etree.HTML(item)
-                    a = html.xpath('//a[@class="nbg"]')
-                    if len(a):
-                        href = a[0].attrib['href']
-                        parsed = self.calc_url(href)
-                        if parsed:
-                            book_urls.append(parsed)
-        return book_urls
-
     def load_book_urls_new(self, query):
-        url = DOUBAN_SEARCH_URL
         params = {"cat": DOUBAN_BOOK_CAT, "q": query}
-        data = bytes(urlencode(params), encoding='utf8')
-        res = urlopen(Request(url, data, headers={'user-agent': random_user_agent()}))
+        url = DOUBAN_SEARCH_URL + "?" + urlencode(params)
+        res = urlopen(Request(url, headers=self.get_headers(), method='GET'))
         book_urls = []
         if res.status in [200, 201]:
-            html = etree.HTML(res.read())
+            html_content = self.get_res_content(res)
+            html = etree.HTML(html_content)
             alist = html.xpath('//a[@class="nbg"]')
             for link in alist:
                 href = link.attrib['href']
                 parsed = self.calc_url(href)
                 if parsed:
-                    if len(book_urls) < DOUBAN_CONCURRENCY_SIZE:
+                    if len(book_urls) < self.max_workers:
                         book_urls.append(parsed)
         return book_urls
 
     def search_books(self, query, log):
-        if DOUBAN_SEARCH_NEW_MODE:
-            book_urls = self.load_book_urls_new(query)
-        else:
-            book_urls = self.load_book_urls(query)
+        book_urls = self.load_book_urls_new(query)
         books = []
-        futures = [self.thread_pool.submit(self.book_loader.load_book, book_url, log) for book_url in book_urls]
+        futures = [self.thread_pool.submit(self.load_book, book_url, log) for book_url in book_urls]
         for future in as_completed(futures):
             book = future.result()
             if book is not None:
                 books.append(future.result())
         return books
 
-
-class DoubanBookLoader:
-
-    def __init__(self):
-        self.book_parser = DoubanBookHtmlParser()
-
     def load_book(self, url, log):
         book = None
         start_time = time.time()
-        res = urlopen(Request(url, headers={'user-agent': random_user_agent()}))
+        if self.douban_delay_enable:
+            self.random_sleep(log)
+        res = urlopen(Request(url, headers=self.get_headers(), method='GET'))
         if res.status in [200, 201]:
             log.info("Downloaded:{} Successful,Time {:.0f}ms".format(url, (time.time() - start_time) * 1000))
-            book_detail_content = res.read()
-            book = self.book_parser.parse_book(url, book_detail_content.decode("utf8"))
+            book_detail_content = self.get_res_content(res)
+            book = self.book_parser.parse_book(url, book_detail_content)
         return book
+
+    def get_res_content(self, res):
+        encoding = res.info().get('Content-Encoding')
+        if encoding == 'gzip':
+            res_content = gzip.decompress(res.read())
+        else:
+            res_content = res.read()
+        return res_content.decode(res.headers.get_content_charset())
+
+    def get_headers(self):
+        headers = {'User-Agent': random_user_agent(), 'Accept-Encoding': 'gzip, deflate'}
+        if self.douban_login_cookie:
+            headers['Cookie'] = self.douban_login_cookie
+        return headers
+
+    def random_sleep(self, log):
+        random_sec = random.random() / 10
+        log.info("Random sleep time {}s".format(random_sec))
+        time.sleep(random_sec)
 
 
 class DoubanBookHtmlParser:
@@ -211,7 +206,7 @@ class NewDoubanBooks(Source):
         'title', 'authors', 'tags', 'pubdate', 'comments', 'publisher',
         'identifier:isbn', 'rating', 'identifier:' + PROVIDER_ID
     ])  # language currently disabled
-    book_searcher = DoubanBookSearcher(DOUBAN_CONCURRENCY_SIZE)
+    book_searcher = None
     options = (
         # name, type, default, label, default, choices
         # type 'number', 'string', 'bool', 'choices'
@@ -225,7 +220,24 @@ class NewDoubanBooks(Source):
             _('Add translator to author'),
             _('If selected, translator will be written to metadata as author')
         ),
+        Option(
+            'douban_delay_enable', 'bool', True,
+            _('douban random delay'),
+            _('Random delay for a period of time before request')
+        ),
+        Option(
+            'douban_login_cookie', 'string', None,
+            _('douban login cookie'),
+            _('Browser cookie after login')
+        ),
     )
+
+    def __init__(self, *args, **kwargs):
+        Source.__init__(self, *args, **kwargs)
+        concurrency_size = int(self.prefs.get('douban_concurrency_size'))
+        douban_delay_enable = bool(self.prefs.get('douban_delay_enable'))
+        douban_login_cookie = self.prefs.get('douban_login_cookie')
+        self.book_searcher = DoubanBookSearcher(concurrency_size, douban_delay_enable, douban_login_cookie)
 
     def get_book_url(self, identifiers):  # {{{
         douban_id = identifiers.get(PROVIDER_ID, None)
@@ -277,6 +289,9 @@ class NewDoubanBooks(Source):
         br = self.browser
         log('Downloading cover from:', cached_url)
         try:
+            if self.book_searcher.douban_login_cookie:
+                br = br.clone_browser()
+                br.set_current_header('Cookie', self.book_searcher.douban_login_cookie)
             cdata = br.open_novisit(cached_url, timeout=timeout).read()
             if cdata:
                 result_queue.put((self, cdata))
@@ -304,10 +319,6 @@ class NewDoubanBooks(Source):
             authors=None,  # {{{
             identifiers={},
             timeout=30):
-        concurrency_size = int(self.prefs.get('douban_concurrency_size'))
-        if concurrency_size != self.book_searcher.max_workers:
-            self.book_searcher = DoubanBookSearcher(concurrency_size)
-            
         add_translator_to_author = self.prefs.get(
             'add_translator_to_author')
 

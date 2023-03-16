@@ -12,5 +12,5 @@ Based on https://book.douban.com web pages.
 
 从release页面下载zip包，然后再calibre中安装为插件即可。
 
-参考文档：https://fugary.com/?p=264
+参考文档：https://fugary.com/?p=423
 

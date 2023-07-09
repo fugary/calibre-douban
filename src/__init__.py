@@ -14,6 +14,7 @@ from calibre.ebooks.metadata.book.base import Metadata
 from calibre.ebooks.metadata.sources.base import Source, Option
 from lxml import etree
 
+DOUBAN_BOOK_BASE = "https://book.douban.com/"
 DOUBAN_SEARCH_JSON_URL = "https://www.douban.com/j/search"
 DOUBAN_SEARCH_URL = "https://www.douban.com/search"
 DOUBAN_BOOK_URL = 'https://book.douban.com/subject/%s/'
@@ -22,7 +23,7 @@ DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 DOUBAN_BOOK_URL_PATTERN = re.compile(".*/subject/(\\d+)/?")
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (2, 0, 0)
+PROVIDER_VERSION = (2, 0, 1)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -159,7 +160,7 @@ class DoubanBookHtmlParser:
         book['source'] = {
             "id": PROVIDER_ID,
             "description": PROVIDER_NAME,
-            "link": "https://book.douban.com/"
+            "link": DOUBAN_BOOK_BASE
         }
         return book
 
@@ -292,6 +293,7 @@ class NewDoubanBooks(Source):
             if self.book_searcher.douban_login_cookie:
                 br = br.clone_browser()
                 br.set_current_header('Cookie', self.book_searcher.douban_login_cookie)
+            br.set_current_header('Referer', DOUBAN_BOOK_BASE)
             cdata = br.open_novisit(cached_url, timeout=timeout).read()
             if cdata:
                 result_queue.put((self, cdata))

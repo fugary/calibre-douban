@@ -23,7 +23,7 @@ DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 DOUBAN_BOOK_URL_PATTERN = re.compile(".*/subject/(\\d+)/?")
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (2, 0, 1)
+PROVIDER_VERSION = (2, 1, 0)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -43,9 +43,10 @@ class DoubanBookSearcher:
         if DOUBAN_BOOK_URL_PATTERN.match(url):
             return url
 
-    def load_book_urls_new(self, query):
+    def load_book_urls_new(self, query, log):
         params = {"cat": DOUBAN_BOOK_CAT, "q": query}
         url = DOUBAN_SEARCH_URL + "?" + urlencode(params)
+        log.info(f'Load books by keywords: {query}')
         res = urlopen(Request(url, headers=self.get_headers(), method='GET'))
         book_urls = []
         if res.status in [200, 201]:
@@ -61,7 +62,7 @@ class DoubanBookSearcher:
         return book_urls
 
     def search_books(self, query, log):
-        book_urls = self.load_book_urls_new(query)
+        book_urls = self.load_book_urls_new(query, log)
         books = []
         futures = [self.thread_pool.submit(self.load_book, book_url, log) for book_url in book_urls]
         for future in as_completed(futures):
@@ -110,6 +111,8 @@ class DoubanBookHtmlParser:
     def parse_book(self, url, book_content):
         book = {}
         html = etree.HTML(book_content)
+        if html is None or html.xpath is None:  # xpath判空处理
+            return None
         title_element = html.xpath("//span[@property='v:itemreviewed']")
         book['title'] = self.get_text(title_element)
         share_element = html.xpath("//a[@data-url]")
@@ -227,6 +230,11 @@ class NewDoubanBooks(Source):
             _('Random delay for a period of time before request')
         ),
         Option(
+            'douban_search_with_author', 'bool', False,
+            _('search with authors'),
+            _('add authors to search keywords')
+        ),
+        Option(
             'douban_login_cookie', 'string', None,
             _('douban login cookie'),
             _('Browser cookie after login')
@@ -238,12 +246,15 @@ class NewDoubanBooks(Source):
         concurrency_size = int(self.prefs.get('douban_concurrency_size'))
         douban_delay_enable = bool(self.prefs.get('douban_delay_enable'))
         douban_login_cookie = self.prefs.get('douban_login_cookie')
+        self.douban_search_with_author = bool(self.prefs.get('douban_search_with_author'))
         self.book_searcher = DoubanBookSearcher(concurrency_size, douban_delay_enable, douban_login_cookie)
 
     def get_book_url(self, identifiers):  # {{{
         douban_id = identifiers.get(PROVIDER_ID, None)
+        if douban_id is None:
+            douban_id = identifiers.get('douban', None)
         if douban_id is not None:
-            return (PROVIDER_ID, douban_id, DOUBAN_BOOK_URL % douban_id)
+            return PROVIDER_ID, douban_id, DOUBAN_BOOK_URL % douban_id
 
     def download_cover(
             self,
@@ -325,7 +336,18 @@ class NewDoubanBooks(Source):
             'add_translator_to_author')
 
         isbn = check_isbn(identifiers.get('isbn', None))
-        books = self.book_searcher.search_books(isbn or title, log)
+        new_douban = self.get_book_url(identifiers)
+        if new_douban:
+            # 如果有new_douban的id，直接精确获取数据
+            log.info(f'Load book by {PROVIDER_ID}:{new_douban[1]}')
+            book = self.book_searcher.load_book(new_douban[2], log)
+            books = [book]
+        else:
+            search_keyword = title
+            if self.douban_search_with_author and title and authors:
+                authors_str = ','.join(authors)
+                search_keyword = f'{title} {authors_str}'
+            books = self.book_searcher.search_books(isbn or search_keyword, log)
         for book in books:
             ans = self.to_metadata(book, add_translator_to_author, log)
             if isinstance(ans, Metadata):

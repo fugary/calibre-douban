@@ -8,7 +8,7 @@ Based on https://book.douban.com web pages.
 
 ### 安装方法
 
-下载地址：https://github.com/fugary/calibre-douban/releases
+下载地址：[NewDouban.zip](https://github.com/fugary/calibre-douban/releases/latest/download/NewDouban.zip)
 
 从release页面下载zip包，然后再calibre中安装为插件即可。
 

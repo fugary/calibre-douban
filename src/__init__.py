@@ -23,7 +23,7 @@ DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 DOUBAN_BOOK_URL_PATTERN = re.compile(".*/subject/(\\d+)/?")
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (2, 1, 0)
+PROVIDER_VERSION = (2, 2, 0)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -138,9 +138,11 @@ class DoubanBookHtmlParser:
         for element in elements:
             text = self.get_text(element)
             if text.startswith("作者"):
-                book['authors'].extend([self.get_text(author_element) for author_element in filter(self.author_filter, element.findall("..//a"))])
+                book['authors'].extend([self.get_text(author_element) for author_element in
+                                        filter(self.author_filter, element.findall("..//a"))])
             elif text.startswith("译者"):
-                book['translators'].extend([self.get_text(translator_element) for translator_element in filter(self.author_filter, element.findall("..//a"))])
+                book['translators'].extend([self.get_text(translator_element) for translator_element in
+                                            filter(self.author_filter, element.findall("..//a"))])
             elif text.startswith("出版社"):
                 book['publisher'] = self.get_tail(element)
             elif text.startswith("副标题"):
@@ -165,7 +167,14 @@ class DoubanBookHtmlParser:
             "description": PROVIDER_NAME,
             "link": DOUBAN_BOOK_BASE
         }
+        book['language'] = self.get_book_language(book['title'])
         return book
+
+    def get_book_language(self, title):
+        pattern = r'^[a-zA-Z\-_]+$'
+        if title and ('英文版' in title or bool(re.match(pattern, title))):
+            return 'en_US'
+        return 'zh_CN'
 
     def get_tags(self, book_content):
         tag_match = self.tag_pattern.findall(book_content)
@@ -230,7 +239,7 @@ class NewDoubanBooks(Source):
             _('Random delay for a period of time before request')
         ),
         Option(
-            'douban_search_with_author', 'bool', False,
+            'douban_search_with_author', 'bool', True,
             _('search with authors'),
             _('add authors to search keywords')
         ),
@@ -348,6 +357,8 @@ class NewDoubanBooks(Source):
                 authors_str = ','.join(authors)
                 search_keyword = f'{title} {authors_str}'
             books = self.book_searcher.search_books(isbn or search_keyword, log)
+            if not len(books) and title and (isbn or search_keyword != title):
+                books = self.book_searcher.search_books(title, log)  # 用isbn或者title+auther没有数据，用title重新搜一遍
         for book in books:
             ans = self.to_metadata(book, add_translator_to_author, log)
             if isinstance(ans, Metadata):
@@ -382,7 +393,7 @@ class NewDoubanBooks(Source):
             mi.rating = book['rating']
             mi.isbn = book.get('isbn', '')
             mi.series = book.get('series', [])
-            mi.language = 'zh_CN'
+            mi.language = book.get('language', 'zh_CN')
             log.info('parsed book', book)
             return mi
 

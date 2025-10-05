@@ -23,7 +23,7 @@ DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 DOUBAN_BOOK_URL_PATTERN = re.compile(".*/subject/(\\d+)/?")
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (2, 2, 0)
+PROVIDER_VERSION = (2, 2, 1)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -46,11 +46,13 @@ class DoubanBookSearcher:
     def load_book_urls_new(self, query, log):
         params = {"cat": DOUBAN_BOOK_CAT, "q": query}
         url = DOUBAN_SEARCH_URL + "?" + urlencode(params)
-        log.info(f'Load books by keywords: {query}')
+        log.info(f'Load books by search url: {url}')
         res = urlopen(Request(url, headers=self.get_headers(), method='GET'))
         book_urls = []
         if res.status in [200, 201]:
             html_content = self.get_res_content(res)
+            if self.is_prohibited(html_content, log):
+                return book_urls
             html = etree.HTML(html_content)
             alist = html.xpath('//a[@class="nbg"]')
             for link in alist:
@@ -67,8 +69,8 @@ class DoubanBookSearcher:
         futures = [self.thread_pool.submit(self.load_book, book_url, log) for book_url in book_urls]
         for future in as_completed(futures):
             book = future.result()
-            if book is not None:
-                books.append(future.result())
+            if self.is_valid_book(book):
+                books.append(book)
         return books
 
     def load_book(self, url, log):
@@ -78,10 +80,30 @@ class DoubanBookSearcher:
             self.random_sleep(log)
         res = urlopen(Request(url, headers=self.get_headers(), method='GET'))
         if res.status in [200, 201]:
-            log.info("Downloaded:{} Successful,Time {:.0f}ms".format(url, (time.time() - start_time) * 1000))
             book_detail_content = self.get_res_content(res)
-            book = self.book_parser.parse_book(url, book_detail_content)
+            if self.is_prohibited(book_detail_content, log):
+                return
+            log.info("Downloaded:{} Successful,Time {:.0f}ms".format(url, (time.time() - start_time) * 1000))
+            try:
+                book = self.book_parser.parse_book(url, book_detail_content)
+                if not self.is_valid_book(book):
+                    log.info(f"Parse book content error: {book_detail_content}")
+            except Exception as e:
+                log.info(f"Parse book content error: {e} \n Content: {book_detail_content}")
         return book
+
+    def is_valid_book(self, book):
+        return book is not None and book.get('title', None)
+
+    def is_prohibited(self, html_content, log):
+        prohibited = html_content is not None and '<title>禁止访问</title>' in html_content
+        if prohibited:
+            html = etree.HTML(html_content)
+            content = html.xpath('//div[@id="content"]')
+            if content:
+                html_content = etree.tostring(content[0], encoding='unicode', method='html')
+            log.info(f'Douban网页访问失败：{html_content}')
+        return prohibited
 
     def get_res_content(self, res):
         encoding = res.info().get('Content-Encoding')
@@ -350,7 +372,9 @@ class NewDoubanBooks(Source):
             # 如果有new_douban的id，直接精确获取数据
             log.info(f'Load book by {PROVIDER_ID}:{new_douban[1]}')
             book = self.book_searcher.load_book(new_douban[2], log)
-            books = [book]
+            books = []
+            if self.book_searcher.is_valid_book(book):
+                books.append(book)
         else:
             search_keyword = title
             if self.douban_search_with_author and title and authors:

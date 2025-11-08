@@ -12,7 +12,8 @@ from calibre import random_user_agent
 from calibre.ebooks.metadata import check_isbn
 from calibre.ebooks.metadata.book.base import Metadata
 from calibre.ebooks.metadata.sources.base import Source, Option
-from lxml import etree
+from calibre.ebooks.BeautifulSoup import BeautifulSoup
+from bs4 import Tag
 
 DOUBAN_BOOK_BASE = "https://book.douban.com/"
 DOUBAN_SEARCH_JSON_URL = "https://www.douban.com/j/search"
@@ -23,7 +24,7 @@ DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 DOUBAN_BOOK_URL_PATTERN = re.compile(".*/subject/(\\d+)/?")
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (2, 2, 2)
+PROVIDER_VERSION = (2, 3, 0)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -53,10 +54,10 @@ class DoubanBookSearcher:
             html_content = self.get_res_content(res)
             if self.is_prohibited(html_content, log):
                 return book_urls
-            html = etree.HTML(html_content, parser=etree.HTMLParser(recover=True, encoding='iso8859-1'))
-            alist = html.xpath('//a[@class="nbg"]')
+            html = BeautifulSoup(html_content)
+            alist = html.select('a.nbg')
             for link in alist:
-                href = link.attrib['href']
+                href = link.get('href', '')
                 parsed = self.calc_url(href)
                 if parsed:
                     if len(book_urls) < self.max_workers:
@@ -98,10 +99,8 @@ class DoubanBookSearcher:
     def is_prohibited(self, html_content, log):
         prohibited = html_content is not None and '<title>禁止访问</title>' in html_content
         if prohibited:
-            html = etree.HTML(html_content, parser=etree.HTMLParser(recover=True, encoding='utf-8'))
-            content = html.xpath('//div[@id="content"]')
-            if content:
-                html_content = etree.tostring(content[0], encoding='unicode', method='html')
+            html = BeautifulSoup(html_content)
+            html_content = html.select_one('div#content')
             log.info(f'Douban网页访问失败：{html_content}')
         return prohibited
 
@@ -132,39 +131,40 @@ class DoubanBookHtmlParser:
 
     def parse_book(self, url, book_content):
         book = {}
-        html = etree.HTML(book_content, parser=etree.HTMLParser(recover=True, encoding='utf-8'))
-        if html is None or html.xpath is None:  # xpath判空处理
+        html = BeautifulSoup(book_content)
+        if html is None or html.select is None:  # html判空处理
             return None
-        title_element = html.xpath("//span[@property='v:itemreviewed']")
+        title_element = html.select("span[property='v:itemreviewed']")
         book['title'] = self.get_text(title_element)
-        share_element = html.xpath("//a[@data-url]")
+        share_element = html.select("a[data-url]")
         if len(share_element):
-            url = share_element[0].attrib['data-url']
+            url = share_element[0].get('data-url')
         book['url'] = url
         id_match = self.id_pattern.match(url)
         if id_match:
             book['id'] = id_match.group(1)
-        img_element = html.xpath("//a[@class='nbg']")
+        img_element = html.select("a.nbg")
         if len(img_element):
-            cover = img_element[0].attrib['href']
+            cover = img_element[0].get('href', '')
             if not cover or cover.endswith('update_image'):
                 book['cover'] = ''
             else:
                 book['cover'] = cover
-        rating_element = html.xpath("//strong[@property='v:average']")
+        rating_element = html.select("strong[property='v:average']")
         book['rating'] = self.get_rating(rating_element)
-        elements = html.xpath("//span[@class='pl']")
+        elements = html.select("span.pl")
         book['authors'] = []
         book['translators'] = []
         book['publisher'] = ''
         for element in elements:
             text = self.get_text(element)
+            parent_ele = element.find_parent()
             if text.startswith("作者"):
                 book['authors'].extend([self.get_text(author_element) for author_element in
-                                        filter(self.author_filter, element.findall("..//a"))])
+                                        filter(self.author_filter, parent_ele.select("a"))])
             elif text.startswith("译者"):
                 book['translators'].extend([self.get_text(translator_element) for translator_element in
-                                            filter(self.author_filter, element.findall("..//a"))])
+                                            filter(self.author_filter, parent_ele.select("a"))])
             elif text.startswith("出版社"):
                 book['publisher'] = self.get_tail(element)
             elif text.startswith("副标题"):
@@ -174,16 +174,12 @@ class DoubanBookHtmlParser:
             elif text.startswith("ISBN"):
                 book['isbn'] = self.get_tail(element)
             elif text.startswith("丛书"):
-                book['series'] = self.get_text(element.getnext())
-        summary_element = html.xpath("//div[@id='link-report']//div[@class='intro']")
+                book['series'] = self.get_text(element.find_next_sibling())
+        summary_element = html.select("div#link-report div.intro")
         book['description'] = ''
         if len(summary_element):
-            book['description'] = etree.tostring(summary_element[-1], encoding="utf8").decode("utf8").strip()
-        tag_elements = html.xpath("//a[contains(@class, 'tag')]")
-        if len(tag_elements):
-            book['tags'] = [self.get_text(tag_element) for tag_element in tag_elements]
-        else:
-            book['tags'] = self.get_tags(book_content)
+            book['description'] = str(summary_element[-1])
+        book['tags'] = self.get_tags(book_content)
         book['source'] = {
             "id": PROVIDER_ID,
             "description": PROVIDER_NAME,
@@ -209,23 +205,27 @@ class DoubanBookHtmlParser:
         return float(self.get_text(rating_element, '0')) / 2
 
     def author_filter(self, a_element):
-        a_href = a_element.attrib['href']
+        a_href = a_element.get('href', '')
         return '/author' in a_href or '/search' in a_href
 
     def get_text(self, element, default_str=''):
         text = default_str
-        if len(element) and element[0].text:
-            text = element[0].text.strip()
-        elif isinstance(element, etree._Element) and element.text:
-            text = element.text.strip()
+        if isinstance(element, Tag):
+            text = element.get_text(strip=True)
+        elif len(element) and isinstance(element[0], Tag):
+            text = element[0].get_text(strip=True)
         return text if text else default_str
 
     def get_tail(self, element, default_str=''):
         text = default_str
-        if isinstance(element, etree._Element) and element.tail:
-            text = element.tail.strip()
-            if not text:
-                text = self.get_text(element.getnext(), default_str)
+        if isinstance(element, Tag) and element.next_siblings:
+            for next_sibling in element.next_siblings:
+                if isinstance(next_sibling, str):
+                    text += next_sibling.strip()
+                elif isinstance(next_sibling, Tag):
+                    if not text:
+                        text = self.get_text(next_sibling, default_str)
+                    break
         return text if text else default_str
 
 

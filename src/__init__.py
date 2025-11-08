@@ -23,7 +23,7 @@ DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 DOUBAN_BOOK_URL_PATTERN = re.compile(".*/subject/(\\d+)/?")
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (2, 2, 1)
+PROVIDER_VERSION = (2, 2, 2)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -53,7 +53,7 @@ class DoubanBookSearcher:
             html_content = self.get_res_content(res)
             if self.is_prohibited(html_content, log):
                 return book_urls
-            html = etree.HTML(html_content)
+            html = etree.HTML(html_content, parser=etree.HTMLParser(recover=True, encoding='iso8859-1'))
             alist = html.xpath('//a[@class="nbg"]')
             for link in alist:
                 href = link.attrib['href']
@@ -98,7 +98,7 @@ class DoubanBookSearcher:
     def is_prohibited(self, html_content, log):
         prohibited = html_content is not None and '<title>禁止访问</title>' in html_content
         if prohibited:
-            html = etree.HTML(html_content)
+            html = etree.HTML(html_content, parser=etree.HTMLParser(recover=True, encoding='utf-8'))
             content = html.xpath('//div[@id="content"]')
             if content:
                 html_content = etree.tostring(content[0], encoding='unicode', method='html')
@@ -132,7 +132,7 @@ class DoubanBookHtmlParser:
 
     def parse_book(self, url, book_content):
         book = {}
-        html = etree.HTML(book_content)
+        html = etree.HTML(book_content, parser=etree.HTMLParser(recover=True, encoding='utf-8'))
         if html is None or html.xpath is None:  # xpath判空处理
             return None
         title_element = html.xpath("//span[@property='v:itemreviewed']")

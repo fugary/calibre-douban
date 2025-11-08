@@ -13,6 +13,7 @@ from calibre.ebooks.metadata import check_isbn
 from calibre.ebooks.metadata.book.base import Metadata
 from calibre.ebooks.metadata.sources.base import Source, Option
 from lxml import etree
+from bs4 import BeautifulSoup, Tag
 
 DOUBAN_BOOK_BASE = "https://book.douban.com/"
 DOUBAN_SEARCH_JSON_URL = "https://www.douban.com/j/search"
@@ -23,7 +24,7 @@ DOUBAN_CONCURRENCY_SIZE = 5  # 并发查询数
 DOUBAN_BOOK_URL_PATTERN = re.compile(".*/subject/(\\d+)/?")
 PROVIDER_NAME = "New Douban Books"
 PROVIDER_ID = "new_douban"
-PROVIDER_VERSION = (2, 2, 1)
+PROVIDER_VERSION = (2, 2, 2)
 PROVIDER_AUTHOR = 'Gary Fu'
 
 
@@ -127,70 +128,123 @@ class DoubanBookSearcher:
 
 class DoubanBookHtmlParser:
     def __init__(self):
-        self.id_pattern = DOUBAN_BOOK_URL_PATTERN
-        self.tag_pattern = re.compile("criteria = '(.+)'")
+        self.id_pattern = DOUBAN_BOOK_URL_PATTERN  # 假设是 re.Pattern，如 re.compile(r'/subject/(\d+)/')
+        self.tag_pattern = re.compile(r"criteria = '(.+)'")
 
     def parse_book(self, url, book_content):
-        book = {}
-        html = etree.HTML(book_content)
-        if html is None or html.xpath is None:  # xpath判空处理
+        try:
+            soup = BeautifulSoup(book_content, 'html.parser')
+        except Exception as e:
+            print(f"[ERROR] BeautifulSoup parse failed: {e}")
             return None
-        title_element = html.xpath("//span[@property='v:itemreviewed']")
-        book['title'] = self.get_text(title_element)
-        share_element = html.xpath("//a[@data-url]")
-        if len(share_element):
-            url = share_element[0].attrib['data-url']
+
+        book = {}
+
+        # --- 1. 标题 ---
+        title_element = soup.find('span', {'property': 'v:itemreviewed'})
+        book['title'] = self.get_text([title_element] if title_element else [])
+
+        # --- 2. URL & ID ---
+        share_element = soup.find('a', {'data-url': True})
+        if share_element and share_element.get('data-url'):
+            url = share_element['data-url'].strip()
         book['url'] = url
-        id_match = self.id_pattern.match(url)
-        if id_match:
-            book['id'] = id_match.group(1)
-        img_element = html.xpath("//a[@class='nbg']")
-        if len(img_element):
-            cover = img_element[0].attrib['href']
-            if not cover or cover.endswith('update_image'):
-                book['cover'] = ''
-            else:
+
+        id_match = self.id_pattern.search(url)  # 改用 search 更健壮
+        book['id'] = id_match.group(1) if id_match else ''
+
+        # --- 3. 封面 ---
+        img_element = soup.find('a', class_='nbg')
+        book['cover'] = ''
+        if img_element and img_element.get('href'):
+            cover = img_element['href'].strip()
+            if cover and not cover.endswith('update_image'):
                 book['cover'] = cover
-        rating_element = html.xpath("//strong[@property='v:average']")
-        book['rating'] = self.get_rating(rating_element)
-        elements = html.xpath("//span[@class='pl']")
+
+        # --- 4. 评分 ---
+        rating_element = soup.find('strong', {'property': 'v:average'})
+        book['rating'] = self.get_rating([rating_element] if rating_element else [])
+
+        # --- 5. 信息字段：作者/译者/出版社等 ---
+        elements = soup.find_all('span', class_='pl')
         book['authors'] = []
         book['translators'] = []
         book['publisher'] = ''
+        book['publishedDate'] = ''
+        book['isbn'] = ''
+        book['series'] = ''
+
         for element in elements:
-            text = self.get_text(element)
+            text = self.get_text([element])
+            # 找到包含该 span 的父容器（通常是 <div id="info"> 下的某行）
+            parent_div = element.find_parent()
+
             if text.startswith("作者"):
-                book['authors'].extend([self.get_text(author_element) for author_element in
-                                        filter(self.author_filter, element.findall("..//a"))])
+                # 模拟原 xpath: ..//a → 当前 span 的父级下所有 <a>（排除广告等）
+                # 原逻辑用 author_filter 过滤，这里同样过滤
+                a_list = parent_div.find_all('a') if parent_div else []
+                authors = [
+                    self.get_text([a]) for a in a_list
+                    if self.author_filter(a)
+                ]
+                book['authors'].extend(authors)
+
             elif text.startswith("译者"):
-                book['translators'].extend([self.get_text(translator_element) for translator_element in
-                                            filter(self.author_filter, element.findall("..//a"))])
+                a_list = parent_div.find_all('a') if parent_div else []
+                translators = [
+                    self.get_text([a]) for a in a_list
+                    if self.author_filter(a)
+                ]
+                book['translators'].extend(translators)
+
             elif text.startswith("出版社"):
                 book['publisher'] = self.get_tail(element)
+
             elif text.startswith("副标题"):
-                book['title'] = book['title'] + ':' + self.get_tail(element)
+                tail = self.get_tail(element)
+                if tail:
+                    book['title'] = f"{book['title']}:{tail}"
+
             elif text.startswith("出版年"):
                 book['publishedDate'] = self.get_tail(element)
+
             elif text.startswith("ISBN"):
                 book['isbn'] = self.get_tail(element)
+
             elif text.startswith("丛书"):
-                book['series'] = self.get_text(element.getnext())
-        summary_element = html.xpath("//div[@id='link-report']//div[@class='intro']")
+                next_elem = element.find_next_sibling()
+                if next_elem and isinstance(next_elem, Tag) and next_elem.name == 'a':
+                    book['series'] = self.get_text([next_elem])
+
+        # --- 6. 简介（description）---
+        summary_elements = soup.select('#link-report div.intro')
         book['description'] = ''
-        if len(summary_element):
-            book['description'] = etree.tostring(summary_element[-1], encoding="utf8").decode("utf8").strip()
-        tag_elements = html.xpath("//a[contains(@class, 'tag')]")
-        if len(tag_elements):
-            book['tags'] = [self.get_text(tag_element) for tag_element in tag_elements]
+        if summary_elements:
+            # 取最后一个（通常是展开后的完整简介）
+            last_intro = summary_elements[-1]
+            # 模拟原逻辑：etree.tostring → 保留 HTML 结构（非纯文本）
+            book['description'] = str(last_intro).strip()
+
+        # --- 7. 标签（tags）---
+        tag_elements = soup.find_all('a', class_=lambda x: x and 'tag' in x.split())
+        if tag_elements:
+            book['tags'] = [self.get_text([tag]) for tag in tag_elements]
         else:
             book['tags'] = self.get_tags(book_content)
+
+        # --- 8. 来源（source）---
         book['source'] = {
             "id": PROVIDER_ID,
             "description": PROVIDER_NAME,
             "link": DOUBAN_BOOK_BASE
         }
+
+        # --- 9. 语言 ---
         book['language'] = self.get_book_language(book['title'])
+
         return book
+
+    # =============== 以下为辅助方法（适配 BeautifulSoup） ===============
 
     def get_book_language(self, title):
         pattern = r'^[a-zA-Z\-_]+$'
@@ -200,34 +254,66 @@ class DoubanBookHtmlParser:
 
     def get_tags(self, book_content):
         tag_match = self.tag_pattern.findall(book_content)
-        if len(tag_match):
-            return [tag.replace('7:', '') for tag in
-                    filter(lambda tag: tag and tag.startswith('7:'), tag_match[0].split('|'))]
+        if tag_match:
+            # 注意：原代码 tag_match[0].split('|')，但 criteria 可能是 JS 字符串，含引号/转义
+            criteria_str = tag_match[0]
+            # 尝试提取 7: 开头的标签（如 "7:小说|7:历史"）
+            tags = []
+            for part in criteria_str.split('|'):
+                part = part.strip()
+                if part.startswith('7:'):
+                    tag = part[2:].strip()
+                    if tag:
+                        tags.append(tag)
+            return tags
         return []
 
-    def get_rating(self, rating_element):
-        return float(self.get_text(rating_element, '0')) / 2
+    def get_rating(self, rating_elements):
+        # rating_elements 是 [Tag] 或 []
+        text = self.get_text(rating_elements, '0')
+        try:
+            return float(text) / 2  # 注意：原逻辑是 /2！（豆瓣10分制 → 你的5分制？）
+        except (ValueError, TypeError):
+            return 0.0
 
     def author_filter(self, a_element):
-        a_href = a_element.attrib['href']
-        return '/author' in a_href or '/search' in a_href
+        # a_element 是 BeautifulSoup.Tag
+        href = a_element.get('href', '')
+        return '/author' in href or '/search' in href
 
-    def get_text(self, element, default_str=''):
-        text = default_str
-        if len(element) and element[0].text:
-            text = element[0].text.strip()
-        elif isinstance(element, etree._Element) and element.text:
-            text = element.text.strip()
-        return text if text else default_str
+    def get_text(self, elements, default_str=''):
+        """
+        兼容原接口：elements 是 [Tag] 或 空列表
+        """
+        if not elements or not isinstance(elements, (list, tuple)):
+            return default_str
+        for elem in elements:
+            if isinstance(elem, Tag) and elem.get_text(strip=True):
+                return elem.get_text(strip=True)
+        return default_str
 
     def get_tail(self, element, default_str=''):
-        text = default_str
-        if isinstance(element, etree._Element) and element.tail:
-            text = element.tail.strip()
-            if not text:
-                text = self.get_text(element.getnext(), default_str)
-        return text if text else default_str
+        """
+        改进版：跳过冒号、空格、换行，取后续第一个有效文本内容
+        """
+        if not isinstance(element, Tag):
+            return default_str
 
+        # 遍历后续兄弟节点，直到找到非空文本
+        for sibling in element.next_siblings:
+            if isinstance(sibling, str):
+                # 清理文本：去空格、去冒号、去中文冒号
+                text = sibling.strip().strip(':： \n\t')
+                if text:
+                    return text
+            elif isinstance(sibling, Tag):
+                # 如果是标签，且是 <a>，取其文本（如出版社是链接）
+                if sibling.name == 'a' and sibling.get_text(strip=True):
+                    return sibling.get_text(strip=True)
+                # 遇到 <br>, <span>, <div> 等，停止（避免跨字段）
+                if sibling.name in ['br', 'span', 'div', 'p']:
+                    break
+        return default_str
 
 class NewDoubanBooks(Source):
     name = 'New Douban Books'  # Name of the plugin
